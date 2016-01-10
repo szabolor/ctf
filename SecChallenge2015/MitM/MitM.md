@@ -20,8 +20,8 @@ if not search("flag|\\.py", f):
 ```
 
 But for a second let's overlook the fact that signing 'flag.txt' is impossible, and instead focus on what would happen during the signing:
- - `msgNum = int(msg.encode("hex"), 16)` string interpreted as a number
- - `sig = str(pow(msgNum, d, N))` sig = msgNum^d (mod N)
+ - `msgNum = int(msg.encode("hex"), 16)` : string interpreted as a number
+ - `sig = str(pow(msgNum, d, N))` : sig = msgNum^d (mod N)
 
 Because of the RSA properties (see the RSA writeup for this) we can divide the msgNum into `msgNum = a * b`, then compute `sig_a = a^d (mod N)` and `sig_b = b^d (mod N)`. From these two signs we could easy get sig: `sig = sig_a * sig_b (mod N)`, thus the deisred signtaure is obtained. So we just have to factorize *msgNum* and get the two signtaures for them, then combine them togother.
 
@@ -62,24 +62,35 @@ Compute sign simple multiply those two number modulo N (which can be found in `c
 So let's get the flag:
 ```bash
 printf "server\nflag.txt\n55923405257079833935200947900874249809341201566030162658666466931048522445016904168409637528718419748197176010436388560877776635257009894523021533556833324771407655958424745770376746164206970113228691953644139595820897463452403994368064575709783576404771469310935502921017646891430180503337655760013762267536\n" | nc IPADDRESS PORTNUM
-#flag.txt contents (47 bytes):
-#SaH{suddenly_its_not_that_unbreakable_anymore}
 ```
 
 
 ## MitM part2 - harDHeads (300 points)
 
+The software concept remained the same as in part1, but the crypto wrapping is new: the signing is performed via AES encryption of the filename XOR-ed with a shared secret. The shared secret is negotioned with Diffe-Hellman protocol, which uses the DH group_17 prime number (so the key-exchange part considered secure) and derived from an md5 algorith, thus it becomes 16 bytes long. The AES part of the signing mathod is also considered secure, although its parameters (key and IV) are fixed (obviously censored in the source file), but there's a weaker part to be investigated: the XOR method.
+
 ### Solution I. - the bug
 
-only the first 16 bytes get signed
-get the sign of  '././././././././asciipig-1.txt'
-get the file '././././././././flag.txt' with the previous sign
-
+We can clearly see a bug in the XOR method:
 ```python
-
+def xorAndPad(str1, str2):
+  ba1 = bytearray(str1)
+  ba2 = bytearray(str2)
+  out = bytearray(AES.block_size)
+  for i in range(AES.block_size):
+    b1 = ba1[i] if i < len(ba1) else 0
+    b2 = ba2[i] if i < len(ba2) else 0
+    out[i] = b1 ^ b2
+  return bytes(out)
 ```
+It's the range of the for-loop, which is fixed to 16 iterations. It means only the first 16 bytes are the base of the signing and the verification as well! Starting with a valid filename, `asciipig-1.txt`, craft an equvivalent filename: `././././././././asciipig-1.txt`. If we ask the client to sign this, it'll do it, but that sign only valid for the `././././././././` part. Thus easy replace the second part, and ask from the server the `././././././././flag.txt` file with the previous signing. :)
+
 
 ### Solution II. - the neat way
+
+Probably the previous bug was completly unintended, and a much more elegant sollution should be exist. For the first in this challenge series let's consider why they are entitled "MitM". Man-in-the-middle attack consist of altering the communication between the parties (client-server in this case) so that he can get force information what he wants and not the client.
+
+For this particular challenge we can play MitM, so we'll be a server for the client and a client for the server. This fact implies that there will be two seperate shared secret: one negotioned with the server (*ss1*) and one with the client (*ss2*). The sign should be something like `sig = crypt(filename XOR ss2)` and the verification would compute `ver = crypt(msg XOR ss1)`. It can be seen that if the argument of the crypto functions are the same (because of its deterministic property), `ver == sig` would be statisfied. That implies `filename XOR ss2 == msg XOR ss1`, where using XOR's properties we get: `msg == filename XOR ss1 XOR ss2`. That means we can ask the client to sign *msg* and uss that to sign *"flag.txt"*. Using this we can write a script something like this:
 
 ```python
 dhPrime = [DH Group 17 - copy from the source file]
@@ -154,7 +165,8 @@ try:
   ss1 = clntDHExchange(srv, srvFile)
   ss2 = srvDHExchange(clnt, clntFile)
   # end DH
-  # 
+  
+  # related message computation
   print "flag=", "flag.txt".encode("hex")
   print "ss1 =", ss1.encode("hex")
   xor1 = xorAndPad("flag.txt", ss1)
